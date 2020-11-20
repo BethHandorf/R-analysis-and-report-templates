@@ -1,0 +1,278 @@
+---
+title: "R Markdown Template and Examples"
+author: "Elizabeth Handorf"
+date: "`r Sys.Date()`"
+output: 
+ html_document:
+  toc: true
+  toc_float: false
+  number_sections: true
+---
+
+This document has two purposes.  First, to document packages and code which I have found useful for producing html reports with RMarkdown.  Second, it can be used as a template which can be edited as needed for actual analysis projects.  
+
+# RMarkdown notes
+
+Note the header information in the .Rmd file.  The Sys.Date() function will update with the date that the report is generated.  The header also creates a table of contents with numbered sections.
+
+For the markup text - spaces matter!  To create a new line, add 2 spaces at the end of the line.  For document section headers, be sure to put a space after the "#". 
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+
+library(plyr)
+library(dplyr)
+library(arsenal)
+library(kableExtra)
+library(survival)
+library(lubridate)
+
+#Change working directory for all code chunks
+#knitr::opts_knit$set(root.dir = 'U://')
+
+
+```
+
+
+
+
+# Cohort definition
+
+Starting with the "colon" dataset from the "survival" package.  Use the "dplyr" package to set up the dataset.  
+https://dplyr.tidyverse.org/
+
+
+Apply exclusion criteria, create CONSORT table
+
+1. Remove observations (duplicates) with "etype=1"  
+2. Remove untreated patients (treatment=observation)  
+2. Remove patients>80
+
+```{r, reuslts='asis'}
+
+#empty table to fill in numbers and descriptions
+# Number of rows = number of exclusions+1
+n.excl<-3
+consort.table<-matrix(rep(NA, 2*(n.excl+1)),ncol=2)
+i<-1
+
+
+#Sample data from survival package
+#Starting size
+dat<-data.frame(colon)
+
+consort.table[i,1]<-"Starting number of observations"
+consort.table[i,2]<-dim(dat)[1]
+i<-i+1
+
+dat<-dat %>% dplyr:::filter(etype==1)
+
+consort.table[i,1]<-"Remove events not of interest"
+consort.table[i,2]<-dim(dat)[1]
+i<-i+1
+
+dat<-dat %>% filter(rx!="Obs")
+
+consort.table[i,1]<-"Remove patients who received observation"
+consort.table[i,2]<-dim(dat)[1]
+i<-i+1
+
+dat<-dat %>% filter(age<=80)
+
+consort.table[i,1]<-"Remove patients over 80"
+consort.table[i,2]<-dim(dat)[1]
+i<-i+1
+
+kable(consort.table) %>% kable_styling()
+
+```
+
+# Simple summary tables
+
+Use the kableExtra package to make nicely formatted tables
+
+```{r, reuslts='asis'}
+kable(table(dat$rx), col.names = c("Treatment","N")) %>% kable_styling()
+```
+
+
+
+# Create "Table 1"
+
+Use the "tableby" funciton from the "arsenal" package to create summary statistics and cross tabs.  Watch out for categorical variables with numeric codings - tableby will assume they are continuous.  
+https://cran.r-project.org/web/packages/arsenal/vignettes/tableby.html  
+
+
+Make it pretty with the "kableExtra" package.  
+
+
+```{r, reuslts='asis'}
+
+tab1 <- tableby( rx ~ sex+ as.factor(sex)+age+as.factor(obstruct), data=dat)
+
+kable(summary(tab1, text=TRUE)) %>% kable_styling()
+```
+
+Make the labels for "Table 1" nicer.  Use exact and non-parametric tests.  Use options from kableExtra. Note: data.frame objects work best as input for kableExtra
+https://cran.r-project.org/web/packages/kableExtra/vignettes/awesome_table_in_html.html
+
+
+```{r, reuslts='asis'}
+
+#make categorical variables into factors
+dat$sex<-factor(dat$sex)
+
+#Customize labels
+dat$obstruct<-as.factor(dat$obstruct)
+attr(dat$obstruct,'label')  <- 'Obstruction'
+
+
+tab1 <- tableby( rx ~ sex+ age+obstruct, data=dat, cat.test="fe", numeric.test = "kwt")
+
+kable(summary(tab1, text=TRUE)) %>% kable_styling()
+```
+
+# MVA - factors associated with treatment
+
+
+```{r, results="asis"}
+
+#make a binary indicator for treatment
+dat$Lev5FU<-as.numeric(dat$rx=="Lev+5FU")
+
+#10 years of age
+dat$age10y<-dat$age/10
+
+
+#Run the logistic regression
+m1<-glm(Lev5FU~ age10y+sex+obstruct+perfor+as.factor(extent)+node4
+, data=dat, family="binomial")
+
+#Extract the components of interest from the model
+restab<-coefficients(summary(m1))
+
+restab2<-data.frame(OR=exp(restab[,1]),LCL=exp(restab[,1]-1.96*restab[,2]),UCL=exp(restab[,1]+1.96*restab[,2]),pval=restab[,4])
+                
+#remove the first row (intercept), make a nice table
+kable(restab2[-1,]) %>% kable_styling()
+
+```
+
+Make the results table nicer
+
+```{r, results="asis"}
+# More meanigful row names
+rownames(restab2)<-c("Intercept",
+                    "Age (per 10 year increase)",
+                     "Male",
+                     "Obstruction",
+                     "Perforation",
+                     "Spread to muscle (vs mucosa)",
+                      "Spread to serosa (vs mucosa)",
+                      "Spread to contiguous structures (vs mucosa)",
+                     ">4 nodes"
+)
+
+#Round the columns to 2 or 3 significant digits
+kable(restab2[-1,], digits=c(2,2,2,3)) %>% kable_styling()
+
+```
+
+
+# Survival Analyses
+
+## Unadjusted
+
+```{r, reuslts='asis'}
+#Re-scale days to months
+dat$months<-dat$time/30.4
+
+s<-survfit(Surv(months, status==1)~Lev5FU, data=dat)
+
+plot(s, col=c("firebrick4","navy"), xlab="Months", ylab="Proportion surviving", main="Progression-free survival")
+legend("topright", c("Lev", "Lev+5FU"), col=c("firebrick4","navy"), lty=1)
+
+#summary table for medians
+kable(summary(s)$table) %>% kable_styling()
+```
+
+Median survival
+```{r, reuslts='asis'}
+
+#make the table nicer
+restab<-summary(s)$table[,c(1,4,7:9)]
+rownames(restab)<-c("Lev","Lev+5FU")
+kable(restab, digits=c(0,0,1,1,1)) %>% kable_styling()
+
+
+```
+
+Survival at 2 years, 5 years
+
+```{r, reuslts='asis'}
+#Make a table of survival at specific times
+
+s.T <- summary(s, times=c(24,60))
+#extract only the components we want
+#convert to a data frame
+s.T.mat<-data.frame(Treatment=s.T$strata,
+                    time=s.T$time,
+                    n.risk=s.T$n.risk, 
+                    Surv=s.T$surv, 
+                    LCL=s.T$lower, 
+                    UCL=s.T$upper)
+
+s.T.mat[,1]<-c("Lev","Lev","Lev+5FU","Lev+5FU")
+
+kable(s.T.mat, digits=c(0,0,0,3,3,3)) %>% kable_styling()
+```
+
+## Adjusted Cox PH model
+
+
+```{r, results="asis"}
+
+
+m1<-coxph(Surv(months, status==1)~Lev5FU+age10y+sex+obstruct+perfor+as.factor(extent)+node4
+, data=dat)
+
+#Print off total number of observations used
+print(paste("Total observations used = ",m1[["n"]]))
+
+#Format this more nicely
+cat(paste("  \nTotal observations used = ",m1[["n"]])) # "  \n" for new line
+
+restab<-coefficients(summary(m1))
+
+restab2<-data.frame(HR=exp(restab[,1]),LCL=exp(restab[,1]-1.96*restab[,3]),UCL=exp(restab[,1]+1.96*restab[,3]),pval=restab[,5])
+                
+
+kable(restab2) %>% kable_styling()
+
+
+```
+Make the results table nicer
+
+```{r, results="asis"}
+# More meanigful row names
+rownames(restab2)<-c("Lev+5FU vs Lev",
+                    "Age (per 10 year increase)",
+                     "Male",
+                     "Obstruction",
+                     "Perforation",
+                     "Spread to muscle (vs mucosa)",
+                      "Spread to serosa (vs mucosa)",
+                      "Spread to contiguous structures (vs mucosa)",
+                     ">4 nodes"
+)
+
+#replace small p-vals
+restab2$pval<-round(restab2$pval,3)
+restab2$pval[restab2$pval<0.001]<-"<0.001"
+
+#Round the columns to 2 or 3 significant digits
+kable(restab2, digits=c(2,2,2,3)) %>% kable_styling()
+
+```
