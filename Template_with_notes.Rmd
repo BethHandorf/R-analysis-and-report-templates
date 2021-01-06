@@ -196,6 +196,12 @@ legend("topright", c("Lev", "Lev+5FU"), col=c("firebrick4","navy"), lty=1)
 
 #summary table for medians
 kable(summary(s)$table) %>% kable_styling()
+
+#p-val for log-rank test
+s.test<-survdiff(Surv(months, status==1)~Lev5FU, data=dat)
+p.val <- 1 - pchisq(s.test$chisq, length(s.test$n) - 1)
+cat(paste("P-val=",round(p.val,4)))
+
 ```
 
 Median survival
