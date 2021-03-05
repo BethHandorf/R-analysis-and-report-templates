@@ -1,0 +1,170 @@
+---
+title: "Propensity score matching"
+author: "Elizabeth Handorf"
+date: "`r Sys.Date()`"
+output: 
+ html_document:
+  toc: true
+  toc_float: false
+  number_sections: true
+---
+
+Example code for running a propensity score-matched analysis.  
+
+This document uses the "colon" dataset in the "survival" package
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(plyr)
+library(dplyr)
+library(arsenal)
+library(kableExtra)
+library(survival)
+library(lubridate)
+library(Matching)
+library(SuperLearner)
+#Change working directory for all code chunks
+#knitr::opts_knit$set(root.dir = 'U://')
+
+#Sample data from survival package
+dat<-data.frame(colon)
+dat<-dat %>% dplyr:::filter(etype==1) %>%
+dplyr::filter(rx!="Obs") %>%
+dplyr::filter(!is.na(differ) & !is.na(nodes))
+
+```
+
+```{r }
+
+#Set up the dataset for PS estimation
+
+#Indicator for treatment of interest
+dat$Lev5FU = as.numeric(dat$rx=="Lev+5FU")
+
+#We will exact match on perforation status, age within 5 years
+#All other factors go into the propensity score
+
+#PS estimation via super-learner
+
+#Factor vars
+#First make into factors
+facts<-dat %>% dplyr::select(differ, extent) 
+  facts<- data.frame(lapply(facts, factor))
+#Convert factors to numeric
+facts_encoded<- model.matrix(~-1+differ+extent,data=facts)
+colnames(facts_encoded)<-gsub("\\s", "", colnames(facts_encoded)) 
+facts_encoded<-as.data.frame(facts_encoded)
+  
+#Numeric vars
+numeric<- dat %>% dplyr::select(sex, age, obstruct, adhere, nodes, surg)
+
+#Combine the two groups together
+X_predictors = cbind(facts_encoded, numeric)
+
+####### Estimate the propensity score
+set.seed(147852)
+#Run the super-learner with a variety of methods
+sl_mod = SuperLearner(Y = dat$Lev5FU, X = X_predictors , family = binomial(),
+                      SL.library = c( "SL.glmnet", "SL.randomForest", "SL.bartMachine","SL.ksvm","SL.xgboost"))
+
+
+pr.Tot<-sl_mod$SL.predict
+
+#May want to save super learner results since this procedure can take a while
+#save.image("/SLRes.RData")
+
+
+```
+
+# Find matches
+
+
+## Propensity score distribution - pre matched
+```{r }
+
+par(mfrow=c(2,1))
+hist(pr.Tot[dat$Lev5FU==0],xlim=c(0,1))
+hist(pr.Tot[dat$Lev5FU==1],xlim=c(0,1))
+```
+
+## Find matches
+
+Matching without replacement. Exact match on perforation and sex, age match within 5 years, propensity score within caliper of 0.01
+
+```{r }
+
+X_match=cbind(pr.Tot,dat$age,dat$perfor, dat$sex)
+
+set.seed(147852)
+
+matches<-Match(Tr=dat$Lev5FU,X=X_match, exact=c(F,F,T,T),M=1,ties=F,replace=F,caliper=c(.01,5,0,0))
+summary(matches)
+
+```
+
+## Check match balance
+
+Note: std mean diff = std diff *100  
+Rule of thumb: this should be less than 10  
+P-values - preferably look at the  Kolmogorov-Smirnov test (ks)  
+  
+Note: this was originally randomized data.  In some ways, matching is actually making the balance worse!  This is just for example purposes.  
+
+```{r }
+#Check the balance
+
+MatchBalance(Lev5FU~as.factor(differ) + as.factor(extent)+sex+ age+ obstruct+ adhere+ nodes+ surg+perfor, data = dat, match.out = matches, ks=TRUE)
+```
+
+# Analysis of matched data
+
+See discussion of methods here:
+https://cran.r-project.org/web/packages/MatchIt/vignettes/estimating-effects.html#after-pair-matching-without-replacement
+
+```{r, results='asis' }
+
+#Set up the analysis dataset
+
+#Matched cases/controls
+#This gives the case and control ides with their respective pair id
+pairs<-data.frame(cbind(matches$index.treated, matches$index.control,
+                        seq(1:length(matches$index.treated))))
+names(pairs)<-c("case","control","pair.id")
+pairs_long<-cbind.data.frame(matched_id=c(pairs$case,pairs$control), pair=c(pairs$pair.id,pairs$pair.id))
+
+dat.matched<-dat[pairs_long$matched_id,]
+dat.matched$pair.id<-pairs_long$pair
+
+#Now, run analysis
+#Survival outcomes
+#Re-scale days to months
+dat.matched$months<-dat.matched$time/30.4
+
+s<-survfit(Surv(months, status==1)~Lev5FU,data=dat.matched)
+
+#make the table nicer
+restab<-summary(s)$table[,c(1,4,7:9)]
+rownames(restab)<-c("Lev","Lev+5FU")
+kable(restab, digits=c(0,0,1,1,1)) %>% kable_styling()
+
+plot(s, col=c("darkgreen", "navy"), lwd=1.5, main="Overall Survival by treatment type (matched)", xlab="Months")
+legend("topright", c("Lev", "Lev+5FU"),col=c("darkgreen","navy"), lty=1)
+
+m1<-coxph(Surv(months, status==1)~Lev5FU,data=dat.matched,
+              robust = TRUE, 
+              cluster = pair.id)
+
+
+restab<-coefficients(summary(m1))
+restab2<-data.frame(HR=exp(restab[,1]),LCL=exp(restab[,1]-1.96*restab[,3]),UCL=exp(restab[,1]+1.96*restab[,3]),pval=restab[,5])
+# More meanigful row names
+rownames(restab2)<-c("Lev+5FU vs Lev")
+
+#replace small p-vals
+restab2$pval<-round(restab2$pval,3)
+restab2$pval[restab2$pval<0.001]<-"<0.001"
+#Round the columns to 2 or 3 significant digits
+kable(restab2, digits=c(2,2,2,3)) %>% kable_styling()
+
+```
+
