@@ -15,7 +15,6 @@ This document uses the "colon" dataset in the "survival" package
 knitr::opts_chunk$set(echo = FALSE)
 
 
-library(plyr)
 library(dplyr)
 library(arsenal)
 library(kableExtra)
@@ -39,7 +38,7 @@ Apply exclusion criteria, create CONSORT table
 2. Remove untreated patients (treatment=observation)  
 2. Remove patients>80
 
-```{r, reuslts='asis'}
+```{r, results='asis'}
 
 #empty table to fill in numbers and descriptions
 # Number of rows = number of exclusions+1
@@ -82,7 +81,7 @@ kable(consort.table) %>% kable_styling()
 
 
 
-```{r, reuslts='asis'}
+```{r, results='asis'}
 kable(table(dat$rx), col.names = c("Treatment","N")) %>% kable_styling()
 ```
 
@@ -92,7 +91,7 @@ kable(table(dat$rx), col.names = c("Treatment","N")) %>% kable_styling()
 
 Cohort characteristics by treatment
 
-```{r, reuslts='asis'}
+```{r, results='asis'}
 
 tab1 <- tableby( rx ~ sex+ as.factor(sex)+age+as.factor(obstruct), data=dat)
 
@@ -157,7 +156,7 @@ kable(restab2[-1,], digits=c(2,2,2,3)) %>% kable_styling()
 
 Kaplan-Meier survival curves
 
-```{r, reuslts='asis'}
+```{r, results='asis'}
 #Re-scale days to months
 dat$months<-dat$time/30.4
 
@@ -170,7 +169,7 @@ legend("topright", c("Lev", "Lev+5FU"), col=c("firebrick4","navy"), lty=1)
 ```
 
 Median survival
-```{r, reuslts='asis'}
+```{r, results='asis'}
 
 #make the table nicer
 restab<-summary(s)$table[,c(1,4,7:9)]
@@ -182,7 +181,7 @@ kable(restab, digits=c(0,0,1,1,1)) %>% kable_styling()
 
 Survival at 2 & 5 years
 
-```{r, reuslts='asis'}
+```{r, results='asis'}
 #Make a table of survival at specific times
 
 s.T <- summary(s, times=c(24,60))
