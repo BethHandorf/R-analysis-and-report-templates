@@ -15,7 +15,7 @@ This document uses the "colon" dataset in the "survival" package
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE)
-library(plyr)
+
 library(dplyr)
 library(arsenal)
 library(kableExtra)
